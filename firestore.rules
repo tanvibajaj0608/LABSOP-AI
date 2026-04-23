@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reuseable functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'tanvibajaj0608@gmail.com';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && incoming().role == 'scientist'
+                    && incoming().keys().hasAll(['uid', 'email', 'role', 'createdAt', 'displayName'])
+                    && incoming().keys().size() == 5;
+      allow update: if isSignedIn() && (isAdmin() || request.auth.uid == userId)
+                    && (isAdmin() || incoming().role == existing().role);
+    }
+
+    // SOP Documents
+    match /sops/{sopId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && isValidId(sopId)
+                    && incoming().createdBy == request.auth.uid
+                    && incoming().currentVersion == 1
+                    && incoming().createdAt == request.time;
+      allow update: if isSignedIn() && (isAdmin() || existing().createdBy == request.auth.uid)
+                    && incoming().updatedAt == request.time
+                    && incoming().createdBy == existing().createdBy;
+      allow delete: if isSignedIn() && (isAdmin() || existing().createdBy == request.auth.uid);
+    }
+
+    // Revisions
+    match /sops/{sopId}/revisions/{revisionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && (isAdmin() || get(/databases/$(database)/documents/sops/$(sopId)).data.createdBy == request.auth.uid)
+                    && incoming().sopId == sopId
+                    && incoming().createdBy == request.auth.uid
+                    && incoming().createdAt == request.time;
+      allow delete: if isSignedIn() && (isAdmin() || get(/databases/$(database)/documents/sops/$(sopId)).data.createdBy == request.auth.uid);
+      allow update: if false;
+    }
+
+    // Support Messages
+    match /support/{msgId} {
+      allow create: if isSignedIn() 
+                    && incoming().userId == request.auth.uid
+                    && incoming().createdAt == request.time;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // Feedback
+    match /feedback/{feedbackId} {
+      allow create: if isSignedIn() 
+                    && incoming().userId == request.auth.uid
+                    && incoming().createdAt == request.time;
+      allow read, update, delete: if isAdmin();
+    }
+  }
+}
