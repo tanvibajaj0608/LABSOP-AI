@@ -7,6 +7,8 @@ export interface UserProfile {
   role: UserRole;
   organization?: string;
   createdAt: any;
+  dailySopCount?: number;
+  lastSopReset?: any;
 }
 
 export interface SOP {

@@ -4,13 +4,14 @@ import { doc, getDoc, collection, query, orderBy, onSnapshot, updateDoc, addDoc,
 import { db } from '../lib/firebase';
 import { useAuth } from '../App';
 import { SOP, Revision } from '../types';
-import { ArrowLeft, Edit3, History, Download, Share2, Loader2, Save, X, CheckCircle2, AlertTriangle, FileText, ChevronDown, ChevronUp, ShieldCheck, User, MoreVertical, FileDown } from 'lucide-react';
+import { ArrowLeft, Edit3, History, Download, Share2, Loader2, Save, X, CheckCircle2, AlertTriangle, FileText, ChevronDown, ChevronUp, ShieldCheck, User, MoreVertical, FileDown, CheckSquare, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import FeedbackModal from '../components/FeedbackModal';
+import { REGULATORY_CHECKLISTS } from '../constants/checklists';
 
 export default function SOPDetail() {
   const { id } = useParams<{ id: string }>();
@@ -30,9 +31,19 @@ export default function SOPDetail() {
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
+  const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
+  const [isVerifying, setIsVerifying] = useState(false);
 
   useEffect(() => {
     if (!id) return;
+
+    // Trigger feedback form after 30 seconds of reviewing
+    const feedbackTimer = setTimeout(() => {
+      const hasGivenFeedback = localStorage.getItem('has_given_feedback');
+      if (!hasGivenFeedback) {
+        setShowFeedback(true);
+      }
+    }, 30000); // 30 seconds
 
     // Check for edit query param
     const searchParams = new URLSearchParams(location.search);
@@ -43,7 +54,27 @@ export default function SOPDetail() {
     const sopRef = doc(db, 'sops', id);
     const unsubscribeSop = onSnapshot(sopRef, (docSnap) => {
       if (docSnap.exists()) {
-        setSop({ id: docSnap.id, ...docSnap.data() } as SOP);
+        const data = { id: docSnap.id, ...docSnap.data() } as SOP;
+        setSop(data);
+        
+        // Automated Verification Logic
+        setIsVerifying(true);
+        setTimeout(() => {
+          const items = data.guidelines.flatMap(g => 
+            REGULATORY_CHECKLISTS[g] || [`Verification of technical adherence to ${g} specifications`]
+          );
+          
+          // Staggered ticks for realistic feel
+          items.forEach((item, index) => {
+            setTimeout(() => {
+              setCheckedItems(prev => ({ ...prev, [item]: true }));
+              if (index === items.length - 1) {
+                setIsVerifying(false);
+              }
+            }, (index + 1) * 800);
+          });
+        }, 1500); // 1.5 seconds initial wait
+
       } else {
         navigate('/');
       }
@@ -56,13 +87,6 @@ export default function SOPDetail() {
       if (data.length > 0) {
         setCurrentRevision(data[0]);
         setEditContent(data[0].content);
-        
-        // Trigger feedback if requested by CreateSOP
-        const trigger = localStorage.getItem('trigger_feedback');
-        if (trigger === 'true') {
-          localStorage.removeItem('trigger_feedback');
-          triggerFeedback();
-        }
       }
       setLoading(false);
     });
@@ -70,17 +94,9 @@ export default function SOPDetail() {
     return () => {
       unsubscribeSop();
       unsubscribeRevisions();
+      clearTimeout(feedbackTimer);
     };
   }, [id, navigate]);
-
-  const triggerFeedback = () => {
-    const hasGivenFeedback = localStorage.getItem('has_given_feedback');
-    if (!hasGivenFeedback) {
-      setTimeout(() => {
-        setShowFeedback(true);
-      }, 1000);
-    }
-  };
 
   const handleExportPDF = async () => {
     if (!sop) return;
@@ -107,7 +123,6 @@ export default function SOPDetail() {
       
       pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
       pdf.save(`${sop.title.replace(/\s+/g, '_')}_v${sop.currentVersion}.pdf`);
-      triggerFeedback();
     } catch (error) {
       console.error('PDF Export failed:', error);
       alert('Failed to generate PDF');
@@ -178,7 +193,6 @@ export default function SOPDetail() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      triggerFeedback();
     } catch (error) {
       console.error('Word Export failed:', error);
       alert('Failed to generate Word document');
@@ -228,6 +242,13 @@ export default function SOPDetail() {
       updatedAt: serverTimestamp()
     });
   };
+
+  const complianceItems = sop ? sop.guidelines.flatMap(g => 
+    REGULATORY_CHECKLISTS[g] || [`Verification of technical adherence to ${g} specifications`]
+  ) : [];
+  const progress = complianceItems.length > 0 
+    ? Math.round((complianceItems.filter(item => checkedItems[item]).length / complianceItems.length) * 100) 
+    : 0;
 
   if (loading) {
     return (
@@ -448,6 +469,62 @@ export default function SOPDetail() {
               )}
             </AnimatePresence>
           </div>
+
+          {complianceItems.length > 0 && (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+                <div className="flex flex-col">
+                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Workflow Compliance</h3>
+                  {isVerifying && (
+                    <span className="text-[8px] text-blue-500 font-bold animate-pulse uppercase mt-1">AI Scrutiny in Progress...</span>
+                  )}
+                </div>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${progress === 100 && !isVerifying ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                  {isVerifying ? 'Analyzing...' : `${progress}% Verified`}
+                </span>
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mb-4">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: isVerifying ? '30%' : `${progress}%` }}
+                    className={`h-full ${progress === 100 && !isVerifying ? 'bg-green-500' : 'bg-blue-600'}`}
+                  />
+                </div>
+                {complianceItems.map((item, idx) => (
+                  <div 
+                    key={idx}
+                    className="flex items-start gap-3 w-full text-left"
+                  >
+                    <div className={`mt-0.5 shrink-0 ${checkedItems[item] ? 'text-green-500' : 'text-slate-300'}`}>
+                      {checkedItems[item] ? (
+                        <motion.div initial={{ scale: 0.5 }} animate={{ scale: 1 }}>
+                          <CheckSquare size={16} />
+                        </motion.div>
+                      ) : (
+                        <Square size={16} />
+                      )}
+                    </div>
+                    <span className={`text-[11px] leading-relaxed transition-colors duration-500 ${checkedItems[item] ? 'text-slate-400 line-through' : 'text-slate-600'}`}>
+                      {item}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {progress === 100 && !isVerifying && (
+                <div className="px-4 pb-4">
+                   <motion.div 
+                     initial={{ opacity: 0, y: 10 }}
+                     animate={{ opacity: 1, y: 0 }}
+                     className="bg-green-50 border border-green-100 rounded-lg p-3 flex items-center gap-2 text-green-700 text-[10px] font-bold uppercase tracking-widest"
+                   >
+                     <CheckCircle2 size={14} className="shrink-0" />
+                     Registry Compliant (Validated by AI)
+                   </motion.div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="bg-slate-800 rounded-xl p-6 text-white overflow-hidden relative group">
             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform">

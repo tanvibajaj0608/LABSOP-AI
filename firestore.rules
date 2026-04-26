@@ -36,35 +36,41 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.auth.uid == userId
                     && incoming().role == 'scientist'
-                    && incoming().keys().hasAll(['uid', 'email', 'role', 'createdAt', 'displayName'])
-                    && incoming().keys().size() == 5;
+                    && incoming().keys().hasAll(['uid', 'email', 'role', 'createdAt', 'displayName', 'dailySopCount', 'lastSopReset'])
+                    && incoming().keys().size() == 7;
       allow update: if isSignedIn() && (isAdmin() || request.auth.uid == userId)
-                    && (isAdmin() || incoming().role == existing().role);
+                    && (isAdmin() || (
+                      incoming().role == existing().role &&
+                      incoming().email == existing().email &&
+                      incoming().uid == existing().uid &&
+                      (incoming().dailySopCount == existing().dailySopCount || incoming().dailySopCount == (existing().dailySopCount + 1) || (incoming().dailySopCount == 1 && incoming().lastSopReset == request.time))
+                    ));
     }
 
     // SOP Documents
     match /sops/{sopId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn()
+      allow read: if isSignedIn() && (isAdmin() || resource.data.createdBy == request.auth.uid);
+      allow create: if isSignedIn() && isEmailVerified()
                     && isValidId(sopId)
-                    && incoming().createdBy == request.auth.uid
-                    && incoming().currentVersion == 1
-                    && incoming().createdAt == request.time;
-      allow update: if isSignedIn() && (isAdmin() || existing().createdBy == request.auth.uid)
-                    && incoming().updatedAt == request.time
-                    && incoming().createdBy == existing().createdBy;
-      allow delete: if isSignedIn() && (isAdmin() || existing().createdBy == request.auth.uid);
+                    && request.resource.data.createdBy == request.auth.uid
+                    && request.resource.data.currentVersion == 1
+                    && request.resource.data.createdAt == request.time
+                    && (isAdmin() || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('dailySopCount', 0) < 5);
+      allow update: if isSignedIn() && isEmailVerified() && (request.auth.token.email == 'tanvibajaj0608@gmail.com' || resource.data.createdBy == request.auth.uid)
+                    && request.resource.data.updatedAt == request.time
+                    && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if isSignedIn() && isEmailVerified() && (request.auth.token.email == 'tanvibajaj0608@gmail.com' || resource.data.createdBy == request.auth.uid);
     }
 
     // Revisions
     match /sops/{sopId}/revisions/{revisionId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn()
+      allow read: if isSignedIn() && (isAdmin() || get(/databases/$(database)/documents/sops/$(sopId)).data.createdBy == request.auth.uid);
+      allow create: if isSignedIn() && isEmailVerified()
                     && (isAdmin() || get(/databases/$(database)/documents/sops/$(sopId)).data.createdBy == request.auth.uid)
                     && incoming().sopId == sopId
                     && incoming().createdBy == request.auth.uid
                     && incoming().createdAt == request.time;
-      allow delete: if isSignedIn() && (isAdmin() || get(/databases/$(database)/documents/sops/$(sopId)).data.createdBy == request.auth.uid);
+      allow delete: if isSignedIn() && isEmailVerified() && (isAdmin() || get(/databases/$(database)/documents/sops/$(sopId)).data.createdBy == request.auth.uid);
       allow update: if false;
     }
 

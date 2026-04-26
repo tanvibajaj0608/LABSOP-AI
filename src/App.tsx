@@ -38,7 +38,15 @@ export default function App() {
       if (u) {
         const userDoc = await getDoc(doc(db, 'users', u.uid));
         if (userDoc.exists()) {
-          setProfile(userDoc.data() as UserProfile);
+          const data = userDoc.data() as UserProfile;
+          // Lazy migration for existing users
+          if (data.dailySopCount === undefined) {
+            const updatedProfile = { ...data, dailySopCount: 0, lastSopReset: new Date() };
+            await setDoc(doc(db, 'users', u.uid), updatedProfile);
+            setProfile(updatedProfile);
+          } else {
+            setProfile(data);
+          }
         } else {
           // Create default profile for new user
           const newProfile: UserProfile = {
@@ -46,7 +54,9 @@ export default function App() {
             email: u.email || '',
             displayName: u.displayName || 'Lab Scientist',
             role: 'scientist', // Default role
-            createdAt: new Date()
+            createdAt: new Date(),
+            dailySopCount: 0,
+            lastSopReset: new Date()
           };
           await setDoc(doc(db, 'users', u.uid), newProfile);
           setProfile(newProfile);
@@ -66,7 +76,7 @@ export default function App() {
     );
   }
 
-  const isAdmin = user?.email === 'tanvibajaj0608@gmail.com';
+  const isAdmin = user?.email === (import.meta.env.VITE_ADMIN_EMAIL || 'tanvibajaj0608@gmail.com');
 
   return (
     <AuthContext.Provider value={{ user, profile, loading, isAdmin }}>

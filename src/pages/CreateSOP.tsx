@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, addDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, setDoc, serverTimestamp, writeBatch, increment } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../App';
 import { generateSOP } from '../lib/gemini';
-import { ArrowLeft, Loader2, Sparkles, AlertCircle, CheckCircle2, ChevronRight, Upload, Info, FileText } from 'lucide-react';
+import { ArrowLeft, Loader2, Sparkles, AlertCircle, CheckCircle2, ChevronRight, Upload, Info, FileText, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as mammoth from 'mammoth';
 import * as pdfjs from 'pdfjs-dist';
+import { isSameDay } from 'date-fns';
 
 // Set up PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -26,7 +27,7 @@ const GUIDELINE_OPTIONS = [
 ];
 
 export default function CreateSOP() {
-  const { user } = useAuth();
+  const { user, profile, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -38,6 +39,8 @@ export default function CreateSOP() {
   const [guideText, setGuideText] = useState('');
   const [additionalDetails, setAdditionalDetails] = useState('');
   const [version, setVersion] = useState('1');
+  const [customFramework, setCustomFramework] = useState('');
+  const [isAddingCustom, setIsAddingCustom] = useState(false);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -84,9 +87,36 @@ export default function CreateSOP() {
     );
   };
 
+  const handleAddCustomFramework = () => {
+    if (customFramework.trim()) {
+      const framework = customFramework.trim();
+      if (!GUIDELINE_OPTIONS.includes(framework) && !selectedGuidelines.includes(framework)) {
+        handleToggleGuideline(framework);
+      } else if (!selectedGuidelines.includes(framework)) {
+        handleToggleGuideline(framework);
+      }
+      setCustomFramework('');
+      setIsAddingCustom(false);
+    }
+  };
+
   const handleGenerate = async () => {
     if (!title || !guideText || selectedGuidelines.length === 0) {
       setError("Please fill in all required fields including guidelines.");
+      return;
+    }
+
+    if (!profile) return;
+
+    // Daily Limit Check (5 docs per day for non-admins)
+    const today = new Date();
+    const lastReset = profile.lastSopReset?.toDate ? profile.lastSopReset.toDate() : (profile.lastSopReset ? new Date(profile.lastSopReset) : today);
+    const isNewDay = !isSameDay(today, lastReset);
+    
+    const currentCount = isNewDay ? 0 : (profile.dailySopCount || 0);
+
+    if (!isAdmin && currentCount >= 5) {
+      setError("Daily Quota Exceeded: You have reached the limit of 5 protocol generations per day for the free tier laboratory account.");
       return;
     }
 
@@ -102,8 +132,12 @@ export default function CreateSOP() {
         version: parseInt(version)
       });
 
-      // Save to Firestore
-      const sopRef = await addDoc(collection(db, 'sops'), {
+      const batch = writeBatch(db);
+      
+      // 1. Create SOP document
+      const sopsCollection = collection(db, 'sops');
+      const newSopRef = doc(sopsCollection);
+      batch.set(newSopRef, {
         title,
         currentVersion: parseInt(version),
         guidelines: selectedGuidelines,
@@ -113,9 +147,11 @@ export default function CreateSOP() {
         updatedAt: serverTimestamp(),
       });
 
-      // Save the first revision
-      await addDoc(collection(db, 'sops', sopRef.id, 'revisions'), {
-        sopId: sopRef.id,
+      // 2. Create the first revision
+      const revisionsCollection = collection(db, 'sops', newSopRef.id, 'revisions');
+      const newRevisionRef = doc(revisionsCollection);
+      batch.set(newRevisionRef, {
+        sopId: newSopRef.id,
         version: parseInt(version),
         content: generatedContent,
         changelog: 'Initial generation',
@@ -123,19 +159,40 @@ export default function CreateSOP() {
         createdAt: serverTimestamp(),
       });
 
+      // 3. Update User usage stats
+      const userRef = doc(db, 'users', user!.uid);
+      if (isNewDay) {
+        batch.update(userRef, {
+          dailySopCount: 1,
+          lastSopReset: serverTimestamp()
+        });
+      } else {
+        batch.update(userRef, {
+          dailySopCount: increment(1)
+        });
+      }
+
+      await batch.commit();
+
       const hasGivenFeedback = localStorage.getItem('has_given_feedback');
       if (!hasGivenFeedback) {
         localStorage.setItem('trigger_feedback', 'true');
       }
 
-      navigate(`/sop/${sopRef.id}`);
-    } catch (err) {
+      navigate(`/sop/${newSopRef.id}`);
+    } catch (err: any) {
       console.error(err);
-      setError("Failed to generate SOP. Please check your connection and try again.");
+      setError(err.message?.includes('permission-denied') 
+        ? "Access Denied: You have exceeded your daily synthesis quota or lack registry authority." 
+        : "Failed to generate SOP. You may have reached your regulatory quota or encountered a network exception.");
     } finally {
       setLoading(false);
     }
   };
+
+  const today = new Date();
+  const lastReset = profile?.lastSopReset?.toDate ? profile.lastSopReset.toDate() : (profile?.lastSopReset ? new Date(profile.lastSopReset) : today);
+  const remainingQuota = isAdmin ? Infinity : 5 - (isSameDay(today, lastReset) ? (profile?.dailySopCount || 0) : 0);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
@@ -146,6 +203,27 @@ export default function CreateSOP() {
         <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" />
         Dashboard
       </button>
+
+      {!isAdmin && remainingQuota <= 2 && (
+        <motion.div 
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center text-amber-600">
+              <Lock size={20} />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-amber-900">Laboratory Quota Warning</p>
+              <p className="text-xs text-amber-700">You have {remainingQuota} protocol generations remaining for today.</p>
+            </div>
+          </div>
+          <button className="text-[10px] font-bold uppercase tracking-widest text-amber-600 border border-amber-200 px-3 py-1.5 rounded-lg hover:bg-amber-100 transition-all">
+            Upgrade Access
+          </button>
+        </motion.div>
+      )}
 
       <div className="flex flex-col lg:flex-row gap-6 h-full items-stretch">
         {/* Left Side: Resources & Meta */}
@@ -210,7 +288,58 @@ export default function CreateSOP() {
                       {g.split(' ')[0]}
                     </button>
                   ))}
+                  
+                  {/* Dynamic custom guidelines that aren't in the default list */}
+                  {selectedGuidelines.filter(g => !GUIDELINE_OPTIONS.includes(g)).map(g => (
+                    <button
+                      key={g}
+                      onClick={() => handleToggleGuideline(g)}
+                      className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-blue-50 border-blue-100 text-blue-700 transition-all"
+                    >
+                      {g.length > 10 ? g.slice(0, 10) + '...' : g}
+                    </button>
+                  ))}
+
+                  <button
+                    onClick={() => setIsAddingCustom(!isAddingCustom)}
+                    className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border transition-all ${
+                      isAddingCustom 
+                        ? 'bg-slate-900 border-slate-900 text-white' 
+                        : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-blue-200 border-dashed'
+                    }`}
+                  >
+                    {isAddingCustom ? 'Cancel' : '+ Custom'}
+                  </button>
                 </div>
+
+                <AnimatePresence>
+                  {isAddingCustom && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="flex gap-2 pt-2">
+                        <input 
+                          type="text"
+                          placeholder="Framework Name (e.g. ISO 17025)"
+                          className="flex-1 text-[11px] border border-slate-200 rounded-lg p-2 bg-slate-50 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          value={customFramework}
+                          onChange={(e) => setCustomFramework(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleAddCustomFramework()}
+                          autoFocus
+                        />
+                        <button 
+                          onClick={handleAddCustomFramework}
+                          className="px-3 bg-slate-900 text-white rounded-lg text-[10px] font-bold uppercase"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               <button 

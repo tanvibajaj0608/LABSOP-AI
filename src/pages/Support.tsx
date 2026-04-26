@@ -70,7 +70,7 @@ export default function Support() {
             <div className="pt-8 border-t border-slate-800 mt-8">
               <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">
                 System Administrator Account:<br/>
-                tanvibajaj0608@gmail.com
+                {import.meta.env.VITE_ADMIN_EMAIL || 'tanvibajaj0608@gmail.com'}
               </p>
             </div>
           </div>

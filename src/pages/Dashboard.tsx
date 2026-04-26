@@ -4,7 +4,7 @@ import { db } from '../lib/firebase';
 import { useAuth } from '../App';
 import { SOP } from '../types';
 import { Link, useNavigate } from 'react-router-dom';
-import { FileText, Plus, Search, Filter, ChevronRight, Clock, User, ShieldCheck, Loader2, History as HistoryIcon, CheckCircle2, Edit3, Trash2, AlertCircle } from 'lucide-react';
+import { FileText, Plus, Search, Filter, ChevronRight, Clock, User, ShieldCheck, Loader2, History as HistoryIcon, CheckCircle2, Edit3, Trash2, AlertCircle, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -15,6 +15,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -35,14 +36,21 @@ export default function Dashboard() {
   }, [user, isAdmin]);
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm("Are you sure you want to permanently delete this protocol from the registry? This action is immutable.")) return;
+    if (deletingId) return;
     
     setDeletingId(id);
     try {
+      console.log(`Executing direct purge for record: ${id}`);
       await deleteDoc(doc(db, 'sops', id));
-    } catch (error) {
-      console.error(error);
-      alert("Unauthorized: Only administrative authority can purge registry records.");
+      console.log("Purge complete.");
+      setConfirmDeleteId(null);
+    } catch (error: any) {
+      console.error("Purge Registry Failure:", error);
+      let message = "Purge execution failed.";
+      if (error.code === 'permission-denied') {
+        message = "Access Denied: You do not have administrative authority to purge this registry record.";
+      }
+      alert(message);
     } finally {
       setDeletingId(null);
     }
@@ -166,28 +174,73 @@ export default function Dashboard() {
                     </td>
                     <td className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <Link 
-                          to={`/sop/${sop.id}?edit=true`}
-                          className="p-2 text-slate-400 hover:text-blue-600 transition-colors"
-                          title="Edit Document"
-                        >
-                          <Edit3 size={18} />
-                        </Link>
-                        <button 
-                          onClick={() => handleDelete(sop.id)}
-                          disabled={deletingId === sop.id}
-                          className="p-2 text-slate-400 hover:text-red-500 transition-colors disabled:opacity-50"
-                          title="Purge Document"
-                        >
-                          {deletingId === sop.id ? <Loader2 size={18} className="animate-spin" /> : <Trash2 size={18} />}
-                        </button>
-                        <Link 
-                          to={`/sop/${sop.id}`}
-                          className="p-2 text-slate-400 hover:text-slate-900 transition-colors"
-                          title="View Document"
-                        >
-                          <ChevronRight size={18} />
-                        </Link>
+                        <AnimatePresence mode="wait">
+                          {confirmDeleteId === sop.id ? (
+                            <motion.div 
+                              key="confirm"
+                              initial={{ opacity: 0, x: 10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              exit={{ opacity: 0, x: 10 }}
+                              className="flex items-center gap-2 bg-red-50 p-1 pr-2 rounded-lg border border-red-100"
+                            >
+                              <span className="text-[9px] font-bold text-red-600 uppercase px-2">Purge?</span>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDelete(sop.id);
+                                }}
+                                disabled={deletingId === sop.id}
+                                className="bg-red-600 text-white p-1 rounded-md hover:bg-red-700 transition-colors"
+                              >
+                                {deletingId === sop.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                              </button>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDeleteId(null);
+                                }}
+                                disabled={deletingId === sop.id}
+                                className="bg-slate-200 text-slate-600 p-1 rounded-md hover:bg-slate-300 transition-colors"
+                              >
+                                <X size={14} />
+                              </button>
+                            </motion.div>
+                          ) : (
+                            <motion.div 
+                              key="actions"
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              className="flex items-center gap-1"
+                            >
+                              <Link 
+                                to={`/sop/${sop.id}?edit=true`}
+                                className="p-2 text-slate-400 hover:text-blue-600 transition-colors"
+                                title="Edit Document"
+                              >
+                                <Edit3 size={18} />
+                              </Link>
+                              <button 
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setConfirmDeleteId(sop.id);
+                                }}
+                                className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                                title="Purge Document"
+                              >
+                                <Trash2 size={18} />
+                              </button>
+                              <Link 
+                                to={`/sop/${sop.id}`}
+                                className="p-2 text-slate-400 hover:text-slate-900 transition-colors"
+                                title="View Document"
+                              >
+                                <ChevronRight size={18} />
+                              </Link>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
                     </td>
                   </tr>
